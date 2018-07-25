@@ -105,77 +105,92 @@ def CoreAnalyticsParser():
     # Parse .core_analytics files from input locaation or from their directory on disk.
     if args.disk:
         analytics_location = glob.glob('/Library/Logs/DiagnosticReports/Analytics*.core_analytics')
+        # additional location
+        analytics_location_retired = glob.glob('/Library/Logs/DiagnosticReports/Retired/*.core_analytics')
     elif args.input and not args.input.endswith('.core_analytics'):
         analytics_location = glob.glob(args.input+'/Analytics*.core_analytics')
     elif args.input and args.input.endswith('.core_analytics'):
         analytics_location = [args.input]
 
-    if len(analytics_location) < 1:
-        print ("[!] No .core_analytics files found.")
-    else:
-        print ("[+] Found {0} .core_analytics files to parse.".format(len(analytics_location)))
+    '''
+    we need a function to run parsing on .core_analytics files because we may have more than one set of 
+    files to work with
+    '''
+    def parse_core_analytics(list):
+        for file in list:
+            listCounter = 0
+            data = open(file, 'r').read()
+            data_lines = [json.loads(i) for i in data.split('\n') if i.startswith("{\"message\":")]
 
+            try:
+                diag_start = [json.loads(i) for i in data.split('\n') if
+                            i.startswith("{\"_marker\":") and "end-of-file"
+                            not in i][0]['startTimestamp']
+            except ValueError:
+                diag_start = "ERROR"
+
+            try:
+                diag_end = [json.loads(i) for i in data.split('\n') if
+                            i.startswith("{\"timestamp\":")][0]['timestamp']
+                diag_end = str(parser.parse(diag_end).astimezone(pytz.utc))
+                diag_end = diag_end.replace(' ', 'T').replace('+00:00', 'Z')
+            except ValueError:
+                diag_end = "ERROR"
+
+            for i in data_lines:
+                record = OrderedDict((h, '') for h in headers)
+                record['src_report'] = file
+                record['diag_start'] = diag_start
+                record['diag_end'] = diag_end
+                record['name'] = i['name']
+                record['uuid'] = i['uuid']
+
+                # If any fields not currently recorded (based on the headers above) appear,
+                # they will be added to overflow.
+                record['overflow'] = {}
+
+                for k, v in i['message'].items():
+                    if k in record.keys():
+                        record[k] = i['message'][k]
+                    else:
+                        record['overflow'].update({k: v})
+
+                if len(record['overflow']) == 0:
+                    record['overflow'] = ''
+
+                if record['uptime'] != '':
+                    record['uptime_parsed'] = time.strftime("%H:%M:%S",
+                                                            time.gmtime(record['uptime']))
+
+                if record['activeTime'] != '':
+                    record['activeTime_parsed'] = time.strftime("%H:%M:%S",
+                                                                time.gmtime(record['activeTime']))
+
+                if record['powerTime'] != '':
+                    record['powerTime_parsed'] = time.strftime("%H:%M:%S",
+                                                            time.gmtime(record['powerTime']))
+
+                if record['appDescription'] != '':
+                    record['appName'] = record['appDescription'].split(' ||| ')[0]
+                    record['appVersion'] = record['appDescription'].split(' ||| ')[1]
+
+                line = record.values()
+                output.write_entry(line)
+                listCounter += 1
+    
+    # initialize the counter
     counter = 0
-    for file in analytics_location:
-        data = open(file, 'r').read()
-        data_lines = [json.loads(i) for i in data.split('\n') if i.startswith("{\"message\":")]
-
-        try:
-            diag_start = [json.loads(i) for i in data.split('\n') if
-                          i.startswith("{\"_marker\":") and "end-of-file"
-                          not in i][0]['startTimestamp']
-        except ValueError:
-            diag_start = "ERROR"
-
-        try:
-            diag_end = [json.loads(i) for i in data.split('\n') if
-                        i.startswith("{\"timestamp\":")][0]['timestamp']
-            diag_end = str(parser.parse(diag_end).astimezone(pytz.utc))
-            diag_end = diag_end.replace(' ', 'T').replace('+00:00', 'Z')
-        except ValueError:
-            diag_end = "ERROR"
-
-        for i in data_lines:
-            record = OrderedDict((h, '') for h in headers)
-            record['src_report'] = file
-            record['diag_start'] = diag_start
-            record['diag_end'] = diag_end
-            record['name'] = i['name']
-            record['uuid'] = i['uuid']
-
-            # If any fields not currently recorded (based on the headers above) appear,
-            # they will be added to overflow.
-            record['overflow'] = {}
-
-            for k, v in i['message'].items():
-                if k in record.keys():
-                    record[k] = i['message'][k]
-                else:
-                    record['overflow'].update({k: v})
-
-            if len(record['overflow']) == 0:
-                record['overflow'] = ''
-
-            if record['uptime'] != '':
-                record['uptime_parsed'] = time.strftime("%H:%M:%S",
-                                                        time.gmtime(record['uptime']))
-
-            if record['activeTime'] != '':
-                record['activeTime_parsed'] = time.strftime("%H:%M:%S",
-                                                            time.gmtime(record['activeTime']))
-
-            if record['powerTime'] != '':
-                record['powerTime_parsed'] = time.strftime("%H:%M:%S",
-                                                           time.gmtime(record['powerTime']))
-
-            if record['appDescription'] != '':
-                record['appName'] = record['appDescription'].split(' ||| ')[0]
-                record['appVersion'] = record['appDescription'].split(' ||| ')[1]
-
-            line = record.values()
-            output.write_entry(line)
-            counter += 1
-
+    
+    # check our locations for .core_analytics files      
+    if len(analytics_location) and len(analytics_location_retired) < 1:
+        print ("[!] No .core_analytics files found.")
+    elif len(analytics_location) >= 1:
+        print("[+] Found {0} .core_analytics files to parse in /Library/Logs/DiagnosticReports/.".format(len(analytics_location)))
+        parse_core_analytics(analytics_location)
+    elif len(analytics_location_retired) >= 1:
+        print ("[+] Found {0} .core_analytics files to parse in /Library/Logs/DiagnosticReports/Retired.".format(len(analytics_location_retired)))
+        parse_core_analytics(analytics_location_retired)
+    
     # Parse aggregate files either from input location or from their directory on disk.
     if args.disk:
         agg_location = glob.glob('/private/var/db/analyticsd/aggregates/*')
