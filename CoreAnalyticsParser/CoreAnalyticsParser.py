@@ -7,6 +7,8 @@
 @ author: Kshitij Kumar
 @ email: kshitij.kumar@crowdstrike.com
 
+@ modified: Julian Thies
+
 '''
 import platform
 import sys
